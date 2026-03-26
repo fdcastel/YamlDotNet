@@ -1,0 +1,66 @@
+name: Pre-release
+
+on:
+  push:
+    branches: [ pre-release ]
+  workflow_dispatch:
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  PACKAGE_VERSION: 17.0.0-pre.${{ github.run_number }}
+
+jobs:
+  build:
+    name: Build and Publish
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - name: Checkout the repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install .NET SDKs
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: |
+          6.0.x
+          8.0.x
+          9.0.x
+          10.0.x
+
+    - name: Generate AssemblyInfo
+      run: |
+        TEMPLATE="YamlDotNet/Properties/AssemblyInfo.template"
+        OUTPUT="YamlDotNet/Properties/AssemblyInfo.cs"
+        sed \
+          -e "s/<%assemblyVersion%>/17.0.0.0/" \
+          -e "s/<%assemblyFileVersion%>/17.0.0.0/" \
+          -e "s/<%assemblyInformationalVersion%>/${{ env.PACKAGE_VERSION }}/" \
+          "$TEMPLATE" > "$OUTPUT"
+        echo "Generated AssemblyInfo.cs with version ${{ env.PACKAGE_VERSION }}"
+
+    - name: Build
+      run: dotnet build YamlDotNet.sln --configuration Release -p:ContinuousIntegrationBuild=true
+
+    - name: Test
+      run: dotnet test YamlDotNet.Test/YamlDotNet.Test.csproj --no-build --configuration Release --verbosity minimal
+
+    - name: Pack YamlDotNet
+      run: dotnet pack YamlDotNet/YamlDotNet.csproj --no-build --configuration Release -p:PackageVersion=${{ env.PACKAGE_VERSION }} --output packages
+
+    - name: Pack YamlDotNet.Analyzers.StaticGenerator
+      run: dotnet pack YamlDotNet.Analyzers.StaticGenerator/YamlDotNet.Analyzers.StaticGenerator.csproj --no-build --configuration Release -p:PackageVersion=${{ env.PACKAGE_VERSION }} --output packages
+
+    - name: Push to GitHub Packages
+      run: |
+        dotnet nuget add source "https://nuget.pkg.github.com/fdcastel/index.json" \
+          --name github \
+          --username fdcastel \
+          --password ${{ secrets.GITHUB_TOKEN }} \
+          --store-password-in-clear-text
+        dotnet nuget push "packages/*.nupkg" --source github --skip-duplicate
